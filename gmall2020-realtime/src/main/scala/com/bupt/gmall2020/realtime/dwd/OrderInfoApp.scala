@@ -95,7 +95,7 @@ object OrderInfoApp {
 //      }
 //      orderInfo
 //    }
-    orderInfoWithFirstFlagDstream.print(1000)
+//    orderInfoWithFirstFlagDstream.print(1000)
     // 5、保存 用户状态--> 更新hbase 维护状态
     orderInfoWithFirstFlagDstream.foreachRDD{rdd=>
       //driver
