@@ -29,7 +29,7 @@ JsonElement jsonElement = jsonObject.get("hits").getAsJsonObject().get("total").
 return  jsonElement.getAsLong();
 ```
 
-## scala 读取配置文件的开发
+## 2、scala 读取配置文件的开发
 ```$xslt
 package com.bupt.gmall2020.realtime.util
 
@@ -60,3 +60,32 @@ object PropertiesUtil {
 
 
 ```
+
+## 3、phoenix
+### 3.1 spark 写入phoenix
+先通过sql语句创建表
+```$xslt
+create table gmall2020_province_info  ( id varchar primary key , info.name  varchar , info.area_code varchar , info.iso_code varchar,info.iso_3166_2 varchar )SALT_BUCKETS = 3;
+```
+1、需要引入 import org.apache.phoenix.spark._ 这个隐式转化
+2、maven包
+```$xslt
+<dependency>
+            <groupId>org.apache.phoenix</groupId>
+            <artifactId>phoenix-spark</artifactId>
+            <version>5.0.0-HBase-2.0</version>
+        </dependency>
+```
+3、示例代码
+```$xslt
+     provinceRDD.saveToPhoenix("gmall2020_province_info",Seq("ID" , "NAME" , "AREA_CODE","ISO_CODE","ISO_3166_2")
+        ,new Configuration
+        ,Some("hdp4.buptnsrc.com:2181"))
+```
+5、利用maxwell-bootstrap 初始化数据
+将mysql原本存在的数据全部送到kafka的gmall_DB_M中
+```$xslt
+bin/maxwell-bootstrap --user maxwell  --password maxwell --host localhost  --database gmall --table base_province --client_id maxwell_1
+```
+ 1)BaseDSMaxwell 将数据从gmall_DB_M打到ODS_BASE_PROVINCE中
+ 2）ProvinceApp, 将数据从ODS_BASE_PROVINCE 写入到phoenix中
