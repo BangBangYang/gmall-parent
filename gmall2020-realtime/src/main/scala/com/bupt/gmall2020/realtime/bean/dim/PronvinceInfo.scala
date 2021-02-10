@@ -11,6 +11,5 @@ case class ProvinceInfo(id:String,
                         iso_code:String,
                         iso_3166_2:String
                        ) {
-  override def toString: String = "id: "+id+" name: "+name+" iso_code: "+iso_code+" iso_3166: "+iso_3166_2
 
 }
