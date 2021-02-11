@@ -1,9 +1,12 @@
 package com.bupt.gmall2020.realtime.dwd
 
+import java.text.SimpleDateFormat
+import java.util.Date
+
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.bupt.gmall2020.realtime.bean.dim.ProvinceInfo
 import com.bupt.gmall2020.realtime.bean.{OrderInfo, UserState}
-import com.bupt.gmall2020.realtime.util.{MyKafkaUtil, OffsetManger, PhoenixUtil}
+import com.bupt.gmall2020.realtime.util.{MyEsUtil, MyKafkaUtil, OffsetManger, PhoenixUtil}
 import org.apache.hadoop.conf.Configuration
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
@@ -96,19 +99,7 @@ object OrderInfoApp {
 //      orderInfo
 //    }
 //    orderInfoWithFirstFlagDstream.print(1000)
-    // 5、保存 用户状态--> 更新hbase 维护状态
-    orderInfoWithFirstFlagDstream.foreachRDD{rdd=>
-      //driver
-      //Seq 中的字段顺序 和 rdd中对象的顺序一直
-      // 把首单的订单 更新到用户状态中
-      val newConsumedUserRDD: RDD[UserState] = rdd.filter(_.if_first_order=="1").map(orderInfo=> UserState(orderInfo.user_id.toString,"1" ))
-     //import org.apache.phoenix.spark._ 该方法增加了rdd的saveToPhoenix方法
-      newConsumedUserRDD.saveToPhoenix("USER_STATE2020",Seq("USER_ID","IF_CONSUMED"),
-        new Configuration,Some("hdp4.buptnsrc.com:2181"))
 
-
-      OffsetManger.setOffset(topic,groupid,offsetRanges)
-    }
     //6、修复如果新用户在同一批次 多次下单 会造成 该批次该用户所有订单都识别为首单
     // 利用hbase  进行查询过滤 识别首单，只能进行跨批次的判断
     //  如果新用户在同一批次 多次下单 会造成 该批次该用户所有订单都识别为首单
@@ -129,7 +120,7 @@ object OrderInfoApp {
         val orderInfoSorted: List[OrderInfo] = orderInfoList.sortWith((orderInfo1, orderInfo2) => (orderInfo1.create_time < orderInfo2.create_time))
         val orderInfoFirst: OrderInfo = orderInfoSorted(0)
         if (orderInfoFirst.if_first_order == "1") {
-          for (i <- 1 to orderInfoList.size) {
+          for (i <- 1 until orderInfoList.size) {
             val orderInfo: OrderInfo = orderInfoList(i)
             orderInfo.if_first_order = "0"
           }
@@ -173,7 +164,35 @@ object OrderInfoApp {
       }
       orderInfoWithProvinceRDD
     }
-    orderInfoWithProvinceDstream.print(100)
+    //8 orderInfoWithProvinceDstream 进行分流操作，最好cache一下避免重复计算
+    //1.保存在hbse中
+    //2.保存在es中
+    orderInfoWithProvinceDstream.cache()
+
+    // 8.1、保存 用户状态--> 更新hbase 维护状态
+    orderInfoWithProvinceDstream.foreachRDD{rdd=>
+      //driver
+      //Seq 中的字段顺序 和 rdd中对象的顺序一直
+      // 把首单的订单 更新到用户状态中
+      val newConsumedUserRDD: RDD[UserState] = rdd.filter(_.if_first_order=="1").map(orderInfo=> UserState(orderInfo.user_id.toString,"1" ))
+      //import org.apache.phoenix.spark._ 该方法增加了rdd的saveToPhoenix方法
+      newConsumedUserRDD.saveToPhoenix("USER_STATE2020",Seq("USER_ID","IF_CONSUMED"),
+        new Configuration,Some("hdp4.buptnsrc.com:2181"))
+
+
+      OffsetManger.setOffset(topic,groupid,offsetRanges)
+    }
+    //8.2 保存到es中
+//    orderInfoWithProvinceDstream.print(100)
+    orderInfoWithProvinceDstream.foreachRDD{rdd=>
+      rdd.foreachPartition{ orderInfoItr=>
+        val orderInfoList: List[OrderInfo] = orderInfoItr.toList
+        val orderInfoWithIdList: List[(String, OrderInfo)] = orderInfoList.map(orderInfo=>(orderInfo.id.toString,orderInfo))
+        val dateString: String = new SimpleDateFormat("yyyy-MM-dd").format(new Date())
+            MyEsUtil.bulkDoc(orderInfoWithIdList,"gmall2020_order_info_"+dateString)
+
+      }
+    }
 
     ssc.start()
     ssc.awaitTermination()
