@@ -1,4 +1,4 @@
-package com.bupt.gmall2020.realtime.bean
+package com.bupt.gmall2020.realtime.bean.dim
 
 /**
  * @author yangkun

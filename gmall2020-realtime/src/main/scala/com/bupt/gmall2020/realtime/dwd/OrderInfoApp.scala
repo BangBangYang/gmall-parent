@@ -3,10 +3,11 @@ package com.bupt.gmall2020.realtime.dwd
 import java.text.SimpleDateFormat
 import java.util.Date
 
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.bupt.gmall2020.realtime.bean.dim.ProvinceInfo
-import com.bupt.gmall2020.realtime.bean.{OrderInfo, UserState}
-import com.bupt.gmall2020.realtime.util.{MyEsUtil, MyKafkaUtil, OffsetManger, PhoenixUtil}
+import com.bupt.gmall2020.realtime.bean.dim.{ProvinceInfo, UserState}
+import com.bupt.gmall2020.realtime.bean.OrderInfo
+import com.bupt.gmall2020.realtime.util.{MyEsUtil, MyKafkaSink, MyKafkaUtil, OffsetManger, PhoenixUtil}
 import org.apache.hadoop.conf.Configuration
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
@@ -164,13 +165,30 @@ object OrderInfoApp {
       }
       orderInfoWithProvinceRDD
     }
-    //8 orderInfoWithProvinceDstream 进行分流操作，最好cache一下避免重复计算
+    //////////// 合并用户信息
+    //////////////////用户信息关联//////////////////////////
+    val orderInfoWithUserDstream: DStream[OrderInfo] = orderInfoWithProvinceDstream.mapPartitions { orderInfoItr =>
+      val orderList: List[OrderInfo] = orderInfoItr.toList
+      if(orderList.size>0) {
+        val userIdList: List[Long] = orderList.map(_.user_id)
+        val sql = "select id ,user_level ,  birthday  , gender  , age_group  , gender_name from gmall2020_user_info where id in ('" + userIdList.mkString("','") + "')"
+        val userJsonObjList: List[JSONObject] = PhoenixUtil.queryList(sql)
+        val userJsonObjMap: Map[Long, JSONObject] = userJsonObjList.map(userJsonObj => (userJsonObj.getLongValue("ID"), userJsonObj)).toMap
+        for (orderInfo <- orderList) {
+          val userJsonObj: JSONObject = userJsonObjMap.getOrElse(orderInfo.user_id, null)
+          orderInfo.user_age_group = userJsonObj.getString("AGE_GROUP")
+          orderInfo.user_gender = userJsonObj.getString("GENDER_NAME")
+        }
+      }
+      orderList.toIterator
+    }
+    //8 orderInfoWithUserDstream 进行分流操作，最好cache一下避免重复计算
     //1.保存在hbse中
     //2.保存在es中
-    orderInfoWithProvinceDstream.cache()
+    orderInfoWithUserDstream.cache()
 
     // 8.1、保存 用户状态--> 更新hbase 维护状态
-    orderInfoWithProvinceDstream.foreachRDD{rdd=>
+    orderInfoWithUserDstream.foreachRDD{rdd=>
       //driver
       //Seq 中的字段顺序 和 rdd中对象的顺序一直
       // 把首单的订单 更新到用户状态中
@@ -183,13 +201,20 @@ object OrderInfoApp {
       OffsetManger.setOffset(topic,groupid,offsetRanges)
     }
     //8.2 保存到es中
-//    orderInfoWithProvinceDstream.print(100)
-    orderInfoWithProvinceDstream.foreachRDD{rdd=>
+    orderInfoWithUserDstream.cache()
+    orderInfoWithUserDstream.print(100)
+    orderInfoWithUserDstream.foreachRDD{rdd=>
       rdd.foreachPartition{ orderInfoItr=>
         val orderInfoList: List[OrderInfo] = orderInfoItr.toList
         val orderInfoWithIdList: List[(String, OrderInfo)] = orderInfoList.map(orderInfo=>(orderInfo.id.toString,orderInfo))
         val dateString: String = new SimpleDateFormat("yyyy-MM-dd").format(new Date())
-            MyEsUtil.bulkDoc(orderInfoWithIdList,"gmall2020_order_info_"+dateString)
+        //发送到es
+        MyEsUtil.bulkDoc(orderInfoWithIdList,"gmall2020_order_info_"+dateString)
+        //发送到kafka中
+        for (orderInfo <- orderInfoList ) {
+          val orderInfoJsonString: String  = JSON.toJSONString(orderInfo,new SerializeConfig(true))
+          MyKafkaSink.send("DWD_ORDER_INFO", orderInfoJsonString)
+        }
 
       }
     }

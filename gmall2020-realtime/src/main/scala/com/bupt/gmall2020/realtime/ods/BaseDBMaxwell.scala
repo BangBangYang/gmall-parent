@@ -42,27 +42,53 @@ object BaseDBMaxwell {
       val jsonObj: JSONObject = JSON.parseObject(recordString)
       jsonObj
     }
-    jsonObjDStream.foreachRDD{rdd=>
+    jsonObjDStream.foreachRDD { rdd =>
       //推送到kafka
-      rdd.foreach{jsonObj=>
-        val jsonString=jsonObj.getString("data")
-        val tableName: String = jsonObj.getString("table")
-        val topic="ODS_"+tableName.toUpperCase
-        println(jsonString)
-        if(topic.equals("ODS_ORDER_INFO")){
-          MyKafkaSink.send(topic,jsonString)   //非幂等的操作 可能会导致数据重复
+      rdd.foreach { jsonObj =>
+        if (jsonObj.getJSONObject("data") != null && !jsonObj.getJSONObject("data").isEmpty
+          && !"delete".equals(jsonObj.getString("type")) &&
+          (("order_info".equals(jsonObj.getString("table")) && "insert".equals(jsonObj.getString("type")))
+            || "order_detail".equals(jsonObj.getString("table"))
+            || "base_province".equals(jsonObj.getString("table"))
+            || "user_info".equals(jsonObj.getString("table"))
+            || "base_category3".equals(jsonObj.getString("table"))
+            || "base_trademark".equals(jsonObj.getString("table"))
+            || "spu_info".equals(jsonObj.getString("table"))
+            || "sku_info".equals(jsonObj.getString("table")))) {
+          val tableName: String = jsonObj.getString("table")
+          val jsonString: String = jsonObj.getString("data")
+          val topic = "ODS_" + tableName.toUpperCase
+          println(jsonString)
+          if (topic.equals("ODS_ORDER_INFO")) {
+            //            Thread.sleep(100)
+            MyKafkaSink.send(topic, jsonString) //非幂等的操作 可能会导致数据重复
+          } else if (topic.equals("ODS_BASE_PROVINCE")) {
+
+            MyKafkaSink.send("a", jsonString)
+          } else if (topic.equals("ODS_ORDER_DETAIL")) {
+            //            Thread.sleep(100)
+            MyKafkaSink.send(topic, jsonString)
+          } else if (topic.equals("ODS_USER_INFO")) {
+            MyKafkaSink.send(topic, jsonString)
+          } else if (topic.equals("ODS_BASE_CATEGORY3")) {
+            MyKafkaSink.send(topic, jsonString)
+          } else if (topic.equals("ODS_SPU_INFO")) {
+            MyKafkaSink.send(topic, jsonString)
+          } else if (topic.equals("ODS_BASE_TRADEMARK")) {
+            MyKafkaSink.send(topic, jsonString)
+
+          }else if (topic.equals("ODS_SKU_INFO")) {
+            MyKafkaSink.send(topic, jsonString)
+          }
         }
-
-
       }
+      OffsetManger.setOffset(topic, groupId, offsetRanges)
 
-      OffsetManger.setOffset(topic,groupId,offsetRanges)
     }
 
     ssc.start()
     ssc.awaitTermination()
   }
-
 
 
 }
